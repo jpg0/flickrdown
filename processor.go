@@ -139,7 +139,7 @@ func PerformRun(preprocessor processing.Preprocessor, processor processing.Proce
 		log.Infof("%v > %v ? %v", fileInto.ModTime(), stableTime, fileInto.ModTime().After(stableTime))
 
 		if err != nil {
-			log.Warn("Failed to stat %v to check stabilised. Assuming stable.", toProcess.Name())
+			log.Warnf("Failed to stat %v to check stabilised. Assuming stable.", toProcess.Name())
 		} else {
 			if fileInto.ModTime().After(stableTime) {
 				log.Infof("File %v recently changed, rescheduling", fileInto.Name())

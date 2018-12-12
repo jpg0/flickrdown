@@ -112,7 +112,7 @@ func SafePerformRun(preprocessor processing.Preprocessor, processor processing.P
 	rerun, err := PerformRun(preprocessor, processor, config, cm)
 
 	if err != nil {
-		log.Errorf("Run failed: ", err)
+		log.Errorf("Run failed: %v", err)
 	}
 
 	return rerun
