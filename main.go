@@ -38,7 +38,12 @@ func main() {
 		},
 	}
 	app.Action = verbose(watch)
-	app.Run(os.Args)
+	err := app.Run(os.Args)
+
+	if err != nil {
+		fmt.Errorf("Error occurred: %v", err)
+		os.Exit(-1)
+	}
 }
 
 func verbose(next func(*cli.Context) error) func(*cli.Context) error {

@@ -77,6 +77,7 @@ func (batch *DownloadBatch) prepare() error {
 type RemotePhoto struct {
 	photoInfo photos.PhotoInfo
 	client    *flickr.FlickrClient
+	meta *Meta
 }
 
 func (remotePhoto *RemotePhoto) ID() string {
@@ -85,29 +86,40 @@ func (remotePhoto *RemotePhoto) ID() string {
 
 func (remotePhoto *RemotePhoto) GetMeta() (*Meta, error) {
 
-	photoInfoResponse, err := photos.GetInfo(remotePhoto.client, remotePhoto.photoInfo.Id, "")
+	if remotePhoto.meta == nil {
+		photoInfoResponse, err := photos.GetInfo(remotePhoto.client, remotePhoto.photoInfo.Id, "")
 
-	if err != nil {
-		return nil, errors.Annotate(err, "Failed to retrieve photo info")
+		if err != nil {
+			return nil, errors.Annotate(err, "Failed to retrieve photo info")
+		}
+
+		photoAllContextsResponse, err := photos.GetAllContexts(remotePhoto.client, remotePhoto.photoInfo.Id, "")
+
+		if err != nil {
+			return nil, errors.Annotate(err, "Failed to retrieve photo context")
+		}
+
+		photoSizesResponse, err := photos.GetSizes(remotePhoto.client, remotePhoto.photoInfo.Id, "")
+
+		if err != nil {
+			return nil, errors.Annotate(err, "Failed to retrieve photo sizes")
+		}
+
+		remotePhoto.meta = &Meta{
+			photoInfoResponse.Photo,
+			photoAllContextsResponse.PhotoAllContexts,
+			photoSizesResponse.Sizes,
+
+		}
 	}
 
-	photoAllContextsResponse, err := photos.GetAllContexts(remotePhoto.client, remotePhoto.photoInfo.Id, "")
-
-	if err != nil {
-		return nil, errors.Annotate(err, "Failed to retrieve photo context")
-	}
-
-	meta := &Meta{
-		photoInfoResponse.Photo,
-		photoAllContextsResponse.PhotoAllContexts,
-	}
-
-	return meta, nil
+	return remotePhoto.meta, nil
 }
 
 type Meta struct {
 	photos.PhotoInfo
 	photos.PhotoAllContexts
+	photos.PhotoSizes
 }
 
 func getJson(client *flickr.FlickrClient, method string, id string) (*flickr.BasicResponse, error) {
