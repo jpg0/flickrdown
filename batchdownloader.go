@@ -13,28 +13,20 @@ import (
 	"os"
 	"strings"
 	"time"
+	"github.com/rickb777/date"
 )
 
 import "github.com/jpg0/flickrdown/config"
 
-var minstart = time.Date(2000, 0, 0, 0, 0, 0, 0, time.UTC)
+var minstart = date.New(2000, 0, 0)
 const flicrkDateFormat = "2006-01-02 15:04:05"
 
-func BeginBatchDownload(startAt time.Time, endAt time.Time, config *config.Config) error {
+func BeginBatchDownload(startAt date.Date, endAt date.Date, config *config.Config) error {
 
 	logrus.Debugf("Beginning batch download")
 
-
-	if !isDate(startAt) {
-		return errors.New("startDate is not a date (has a time component)")
-	}
-
 	if startAt.Before(minstart) {
 		return errors.Errorf("Cannot begin batch earlier than %v", minstart)
-	}
-
-	if !isDate(endAt) {
-		return errors.New("endDate is not a date (has a time component)")
 	}
 
 	ctx, err := buildContext(config)
@@ -43,7 +35,22 @@ func BeginBatchDownload(startAt time.Time, endAt time.Time, config *config.Confi
 		return errors.Annotate(err, "Failed to build context")
 	}
 
-	return DownloadForDay(startAt, ctx)
+	daysToProcess := int(endAt.Sub(startAt))
+
+	if daysToProcess < 0 {
+		return errors.New("startAt is after endAt")
+	}
+
+	logrus.Infof("Processing %v days", daysToProcess)
+
+	for day := 0; day < daysToProcess; day++ {
+		err = DownloadForDay(startAt.Add(date.PeriodOfDays(day)), ctx)
+		if err != nil {
+			return errors.Annotatef(err, "Failed to download for day %v", startAt.Add(date.PeriodOfDays(day)))
+		}
+	}
+
+	return nil
 }
 
 func buildContext(config *config.Config) (*DownloadingContext, error) {
@@ -60,16 +67,18 @@ func buildContext(config *config.Config) (*DownloadingContext, error) {
 	}, nil
 }
 
-func DownloadForDay(day time.Time, ctx *DownloadingContext) error {
+func DownloadForDay(day date.Date, ctx *DownloadingContext) error {
 
-	logrus.Debugf("Downloading for day %v", day.Format("2006-01-02"))
+	logrus.Infof("Downloading for day %v", day.Format("2006-01-02"))
 
 	//first query for all photos that day
-	batch := ctx.flickrclient.Search(day, day.AddDate(0, 0, 1))
+	batch := ctx.flickrclient.Search(day, day.Add(1))
+
+	errorChannel := make(chan error)
+
+	photoCount := 0
 
 	for {
-
-		photoCtx := NewPhotoContext(ctx)
 
 		photo, err := batch.NextPhoto()
 
@@ -77,25 +86,45 @@ func DownloadForDay(day time.Time, ctx *DownloadingContext) error {
 			return errors.Annotate(err, "Failed to load photo")
 		}
 
-		photoCtx.SetRemote(photo)
+		if photo == nil {
+			break
+		}
 
-		logrus.Debugf("Processing photo %v", photo.ID())
-
-		err = processPhoto(photoCtx)
+		photoCount += 1
+		go func() {
+			errorChannel <- processPhoto(photo, ctx)
+		}()
 
 		if err != nil {
 			return errors.Annotate(err, "Failed to process photo")
 		}
-
-	//	if photo == nil {
-			break
-	//	}
 	}
 
-	return nil
+	var rv error
+
+	for i := 0; i < photoCount; i++ {
+		select {
+		case e := <-errorChannel:
+			if e != nil {
+				logrus.Errorf("Failed to process photo: %v", e)
+				rv = errors.Errorf("Failures occurred when processing photos for day %v, check logs", day.Format("2006-01-02"))
+			}
+		}
+	}
+
+	logrus.Debugf("Completed downloading for day %v", day.Format("2006-01-02"))
+
+
+	return rv
 }
 
-func processPhoto(photoCtx *PhotoContext) error {
+func processPhoto(photo *flickraccess.RemotePhoto, ctx *DownloadingContext) error {
+
+	photoCtx := NewPhotoContext(ctx)
+
+	photoCtx.SetRemote(photo)
+
+	logrus.Debugf("Processing photo %v", photo.ID())
 
 	err := getFilepath(photoCtx)
 
@@ -104,7 +133,6 @@ func processPhoto(photoCtx *PhotoContext) error {
 	}
 
 	err = downloadAndWriteData(photoCtx)
-
 
 	if err != nil {
 		return errors.Annotatef(err, "Failed to write date for photo: %v", err)
@@ -127,13 +155,12 @@ func downloadAndWriteData(photoCtx *PhotoContext) error {
 		return errors.Annotatef(err, "Failed to marshal metadata: %v", meta.Title)
 	}
 
+	logrus.Debugf("Writing metadata for %v to %v", meta.Title, photoCtx.Filepath + ".meta")
 	err = ioutil.WriteFile(photoCtx.Filepath + ".meta", asJson, 0666)
 
 	if err != nil {
 		return errors.Annotatef(err, "Failed to write meta file: %v", meta.Title)
 	}
-
-	fmt.Println(string(asJson))
 
 	//
 	urlToFetch := ""
@@ -145,7 +172,7 @@ func downloadAndWriteData(photoCtx *PhotoContext) error {
 	}
 
 	if urlToFetch == "" {
-		return errors.Errorf("Failed to find original download URL for photo %v", meta.Title)
+		return errors.Errorf("Failed to find original download URL for photo %s", meta.Title)
 	}
 
 	urlObj, err := url.Parse(urlToFetch)
@@ -164,6 +191,7 @@ func downloadAndWriteData(photoCtx *PhotoContext) error {
 		fileextension = parts[len(parts) - 1]
 	}
 
+	logrus.Debugf("Writing file for %v to %v", meta.Title, photoCtx.Filepath + "." + fileextension)
 	err = DownloadFile(photoCtx.Filepath + "." + fileextension, urlToFetch)
 
 	if err != nil {
@@ -214,19 +242,11 @@ func getFilepath(photoCtx *PhotoContext) error {
 	return nil
 }
 
-func isDate(time time.Time) bool {
-	h, m, s := time.Clock()
-	return h == 0 && m == 0 && s == 0
-}
-
 type DownloadingContext struct {
 	flickrclient *flickraccess.FlickrDownloadClient
-	config *config.Config
+	config       *config.Config
 }
 
-type SavedState struct {
-	startAt time.Time
-}
 
 type PhotoContext struct {
 	DownloadingContext *DownloadingContext

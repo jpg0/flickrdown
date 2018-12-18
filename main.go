@@ -5,10 +5,10 @@ import (
 	"github.com/Sirupsen/logrus"
 	flickrdownconfig "github.com/jpg0/flickrdown/config"
 	"github.com/juju/errors"
+	"github.com/rickb777/date"
 	"github.com/urfave/cli"
 	"os"
 	"strings"
-	"time"
 )
 
 const input_layout string = "2006-01-02"
@@ -98,16 +98,24 @@ func watch(c *cli.Context) error {
 		return errors.Trace(err)
 	}
 
-	startDate := time.Time{}
+	var startDate date.Date
 
 	if c.String("startdate") != "" {
-		startDate, err = time.Parse(input_layout, c.String("startdate"))
+		startDate, err = date.Parse(input_layout, c.String("startdate"))
+		if err != nil {
+			return errors.Trace(err)
+		}
+	}
+
+	endDate := startDate.Add(1)
+
+	if c.String("enddate") != "" {
+		endDate, err = date.Parse(input_layout, c.String("enddate"))
 		if err != nil {
 			return errors.Trace(err)
 		}
 	}
 
 
-
-	return BeginBatchDownload(startDate, time.Time{}, config)
+	return BeginBatchDownload(startDate, endDate, config)
 }

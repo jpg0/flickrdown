@@ -3,75 +3,100 @@ package flickraccess
 import (
 	"encoding/json"
 	"encoding/xml"
+	"github.com/Sirupsen/logrus"
 	"github.com/jpg0/flickr"
 	"github.com/jpg0/flickr/photos"
 	"github.com/jpg0/flickrdown/config"
 	"github.com/juju/errors"
-	"time"
+	"github.com/rickb777/date"
 )
 
 type FlickrDownloadClient struct {
-	client *flickr.FlickrClient
+	apikey string
+	sharedsecret string
 }
 
 func NewDownloadClient(config *config.Config) (*FlickrDownloadClient, error) {
-	client := flickr.NewFlickrClient(config.APIKey, config.SharedSecret)
+	return &FlickrDownloadClient{
+		apikey: config.APIKey,
+		sharedsecret: config.SharedSecret,
+	}, nil
+}
+
+func (downloadclient *FlickrDownloadClient) newClient() *flickr.FlickrClient {
+	client := flickr.NewFlickrClient(downloadclient.apikey, downloadclient.sharedsecret)
 	token, err := getToken(client)
 
-	if err != nil {
-		return nil, err
+	if err != nil { //lazy
+		panic("Failed to build flickr client")
 	}
 
 	client.OAuthToken = token.OAuthToken
 	client.OAuthTokenSecret = token.OAuthTokenSecret
 
-	return &FlickrDownloadClient{client: client}, nil
+	return client
 }
 
-func (downloadclient *FlickrDownloadClient) Search(min_upload_date time.Time, max_upload_date time.Time) *DownloadBatch {
+func (downloadclient *FlickrDownloadClient) Search(min_upload_date date.Date, max_upload_date date.Date) *DownloadBatch {
 
 	return &DownloadBatch{
 		from:   min_upload_date,
 		to:     max_upload_date,
-		client: downloadclient.client,
+		client: downloadclient,
 	}
 }
 
 type DownloadBatch struct {
-	from     time.Time
-	to       time.Time
+	from     date.Date
+	to       date.Date
 	response *photos.PhotoSearchResponse
-	client   *flickr.FlickrClient
+	client   *FlickrDownloadClient
 	cursor   int
 }
 
 func (batch *DownloadBatch) NextPhoto() (*RemotePhoto, error) {
-	if err := batch.prepare(); err != nil {
-		return nil, err
+
+
+	//if not yet fetched
+	if batch.response == nil {
+
+		logrus.Debugf("Searching for photos from %v to %v", batch.from, batch.to)
+
+		response, err := photos.Search(batch.client.newClient(), true, "me", batch.from.UTC(), batch.to.UTC(), 1)
+
+		if err != nil {
+			return nil, errors.Annotate(err, "Failed to search for photos")
+		}
+
+		logrus.Debugf("%v results for photos from %v to %v", len(response.PhotoList.Photos), batch.from, batch.to)
+
+		batch.response = response
+	}
+
+	//if exhausted
+	if batch.cursor == len(batch.response.PhotoList.Photos) {
+		//get next batch or error
+		if batch.response.PhotoList.Page < batch.response.PhotoList.Pages {
+			response, err := photos.Search(batch.client.newClient(), true, "me", batch.from.UTC(), batch.to.UTC(), batch.response.PhotoList.Page + 1)
+
+			if err != nil {
+				return nil, errors.Annotate(err, "Failed to get next search page for photos")
+			}
+
+			batch.response = response
+			batch.cursor = 0
+
+		} else { // no more results
+			return nil, nil
+		}
 	}
 
 	batch.cursor++
 
 	return &RemotePhoto{
 		photoInfo: batch.response.PhotoList.Photos[batch.cursor-1],
-		client:    batch.client,
+		client:    batch.client.newClient(),
 	}, nil
-}
-
-func (batch *DownloadBatch) prepare() error {
-
-	if batch.response == nil {
-
-		response, err := photos.Search(batch.client, true, "me", batch.from, batch.to)
-
-		if err != nil {
-			return errors.Annotate(err, "Failed to search for photos")
-		}
-
-		batch.response = response
-	}
-
-	return nil
 }
 
 type RemotePhoto struct {
